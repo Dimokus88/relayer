@@ -1,0 +1,36 @@
+global:
+    memo: Dimokus#1032
+default_chain: stride-testnet
+chains:
+  gaia-testnet:
+    key: stride_wallet
+    chain-id: GAIA
+    rpc-addr: http://stride.stake-take.com:46657
+    #grpc-addr: http://gaia1:9090
+    account-prefix: cosmos
+    keyring-backend: test
+    gas-adjustment: 1.2
+    gas-prices: 0.01uatom
+    key-directory: /root/.icq/keys
+    debug: true
+    timeout: 20s
+    block-timeout: ""
+    output-format: json
+    sign-mode: direct
+  stride-testnet:
+    key: stride_wallet
+    chain-id: STRIDE-TESTNET-2
+    rpc-addr: http://127.0.0.1:26657
+    #grpc-addr: http://localhost:9090
+    account-prefix: stride
+    keyring-backend: test
+    gas-adjustment: 1.2
+    gas-prices: 0.01ustrd
+    key-directory: /root/.icq/keys
+    debug: true
+    timeout: 20s
+    block-timeout: ""
+    output-format: json
+    sign-mode: direct
+cl: {}
+
