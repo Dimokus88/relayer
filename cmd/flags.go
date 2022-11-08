@@ -45,6 +45,8 @@ const (
 	flagProcessor               = "processor"
 	flagInitialBlockHistory     = "block-history"
 	flagMemo                    = "memo"
+	flagFilterRule              = "filter-rule"
+	flagFilterChannels          = "filter-channels"
 )
 
 const (
@@ -152,6 +154,18 @@ func fileFlag(v *viper.Viper, cmd *cobra.Command) *cobra.Command {
 	return cmd
 }
 
+func pathFilterFlags(v *viper.Viper, cmd *cobra.Command) *cobra.Command {
+	cmd.Flags().String(flagFilterRule, "", `filter rule ("allowlist", "denylist", or "" for no filtering)`)
+	if err := v.BindPFlag(flagFilterRule, cmd.Flags().Lookup(flagFilterRule)); err != nil {
+		panic(err)
+	}
+	cmd.Flags().String(flagFilterChannels, "", "channels from source chain perspective to filter")
+	if err := v.BindPFlag(flagFilterRule, cmd.Flags().Lookup(flagFilterRule)); err != nil {
+		panic(err)
+	}
+	return cmd
+}
+
 func timeoutFlag(v *viper.Viper, cmd *cobra.Command) *cobra.Command {
 	cmd.Flags().StringP(flagTimeout, "t", "10s", "timeout between relayer runs")
 	if err := v.BindPFlag(flagTimeout, cmd.Flags().Lookup(flagTimeout)); err != nil {
@@ -215,7 +229,7 @@ func retryFlag(v *viper.Viper, cmd *cobra.Command) *cobra.Command {
 }
 
 func updateTimeFlags(v *viper.Viper, cmd *cobra.Command) *cobra.Command {
-	cmd.Flags().Duration(flagThresholdTime, 6*time.Hour, "time before to expiry time to update client")
+	cmd.Flags().Duration(flagThresholdTime, relayer.DefaultClientUpdateThreshold, "time after previous client update before automatic client update")
 	if err := v.BindPFlag(flagThresholdTime, cmd.Flags().Lookup(flagThresholdTime)); err != nil {
 		panic(err)
 	}
@@ -293,7 +307,7 @@ func debugServerFlags(v *viper.Viper, cmd *cobra.Command) *cobra.Command {
 }
 
 func processorFlag(v *viper.Viper, cmd *cobra.Command) *cobra.Command {
-	cmd.Flags().StringP(flagProcessor, "p", relayer.ProcessorLegacy, "which relayer processor to use")
+	cmd.Flags().StringP(flagProcessor, "p", relayer.ProcessorEvents, "which relayer processor to use")
 	if err := v.BindPFlag(flagProcessor, cmd.Flags().Lookup(flagProcessor)); err != nil {
 		panic(err)
 	}

@@ -1,15 +1,16 @@
 package ibctest_test
 
 import (
-	"io"
+	"context"
 	"testing"
 
 	relayeribctest "github.com/cosmos/relayer/v2/ibctest"
-	"github.com/strangelove-ventures/ibctest"
-	"github.com/strangelove-ventures/ibctest/conformance"
-	"github.com/strangelove-ventures/ibctest/ibc"
-	ibctestrelayer "github.com/strangelove-ventures/ibctest/relayer"
-	"github.com/strangelove-ventures/ibctest/testreporter"
+	"github.com/cosmos/relayer/v2/relayer"
+	ibctest "github.com/strangelove-ventures/ibctest/v5"
+	"github.com/strangelove-ventures/ibctest/v5/conformance"
+	"github.com/strangelove-ventures/ibctest/v5/ibc"
+	ibctestrelayer "github.com/strangelove-ventures/ibctest/v5/relayer"
+	"github.com/strangelove-ventures/ibctest/v5/testreporter"
 	"go.uber.org/zap/zaptest"
 )
 
@@ -27,29 +28,30 @@ func ibctestConformance(t *testing.T, rf ibctest.RelayerFactory) {
 	})
 	conformance.Test(
 		t,
+		context.Background(),
 		[]ibctest.ChainFactory{cf},
 		[]ibctest.RelayerFactory{rf},
-		// The nop write closer means no test report will be generated,
-		// which is fine for these tests for now.
-		testreporter.NewReporter(newNopWriteCloser()),
+		testreporter.NewNopReporter(),
 	)
 }
 
 // TestRelayerInProcess runs the ibctest conformance tests against
 // the current state of this relayer implementation running in process.
 func TestRelayerInProcess(t *testing.T) {
+	t.Parallel()
 	ibctestConformance(t, relayeribctest.RelayerFactory{})
 }
 
-// TestRelayerDocker runs the ibctest conformance tests against
+// TestRelayerDockerEventProcessor runs the ibctest conformance tests against
 // the current state of this relayer implementation built in docker.
-func TestRelayerDocker(t *testing.T) {
-	relayeribctest.BuildRelayerImage(t)
+// Relayer runs using the event processor.
+func TestRelayerDockerEventProcessor(t *testing.T) {
+	t.Parallel()
 
 	rf := ibctest.NewBuiltinRelayerFactory(
 		ibc.CosmosRly,
 		zaptest.NewLogger(t),
-		ibctestrelayer.CustomDockerImage(relayeribctest.RelayerImageName, "latest"),
+		ibctestrelayer.CustomDockerImage(relayeribctest.RelayerImageName, "latest", "100:1000"),
 		ibctestrelayer.ImagePull(false),
 		ibctestrelayer.StartupFlags("--processor", "events", "--block-history", "100"),
 	)
@@ -57,16 +59,43 @@ func TestRelayerDocker(t *testing.T) {
 	ibctestConformance(t, rf)
 }
 
-// nopWriteCloser is a no-op io.WriteCloser used to satisfy the ibctest TestReporter type.
-// Because the relayer is used in-process, all logs are simply streamed to the test log.
-type nopWriteCloser struct {
-	io.Writer
+// TestRelayerDockerLegacyProcessor runs the ibctest conformance tests against
+// the current state of this relayer implementation built in docker.
+// Relayer runs using the legacy processor.
+func TestRelayerDockerLegacyProcessor(t *testing.T) {
+	t.Parallel()
+	relayeribctest.BuildRelayerImage(t)
+
+	rf := ibctest.NewBuiltinRelayerFactory(
+		ibc.CosmosRly,
+		zaptest.NewLogger(t),
+		ibctestrelayer.CustomDockerImage(relayeribctest.RelayerImageName, "latest", "100:1000"),
+		ibctestrelayer.ImagePull(false),
+		ibctestrelayer.StartupFlags("--processor", "legacy"),
+	)
+
+	ibctestConformance(t, rf)
 }
 
-func (nopWriteCloser) Close() error {
-	return nil
+// TestRelayerEventProcessor runs the ibctest conformance tests against
+// the local relayer code. This is helpful for detecting race conditions.
+// Relayer runs using the event processor.
+func TestRelayerEventProcessor(t *testing.T) {
+	t.Parallel()
+
+	ibctestConformance(t, relayeribctest.NewRelayerFactory(relayeribctest.RelayerConfig{
+		Processor:           relayer.ProcessorEvents,
+		InitialBlockHistory: 100,
+	}))
 }
 
-func newNopWriteCloser() io.WriteCloser {
-	return nopWriteCloser{Writer: io.Discard}
+// TestRelayerLegacyProcessor runs the ibctest conformance tests against
+// the local relayer code. This is helpful for detecting race conditions.
+// Relayer runs using the legacy processor.
+func TestRelayerLegacyProcessor(t *testing.T) {
+	t.Parallel()
+
+	ibctestConformance(t, relayeribctest.NewRelayerFactory(relayeribctest.RelayerConfig{
+		Processor: relayer.ProcessorLegacy,
+	}))
 }

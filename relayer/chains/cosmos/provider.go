@@ -4,11 +4,15 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
-	"github.com/cosmos/cosmos-sdk/crypto/keyring"
+	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/module"
-	chantypes "github.com/cosmos/ibc-go/v4/modules/core/04-channel/types"
+	commitmenttypes "github.com/cosmos/ibc-go/v5/modules/core/23-commitment/types"
+	ibcexported "github.com/cosmos/ibc-go/v5/modules/core/exported"
+	tmclient "github.com/cosmos/ibc-go/v5/modules/light-clients/07-tendermint/types"
+	"github.com/cosmos/relayer/v2/relayer/processor"
 	"github.com/cosmos/relayer/v2/relayer/provider"
 	"github.com/gogo/protobuf/proto"
 	lens "github.com/strangelove-ventures/lens/client"
@@ -31,6 +35,7 @@ type CosmosProviderConfig struct {
 	KeyringBackend string  `json:"keyring-backend" yaml:"keyring-backend"`
 	GasAdjustment  float64 `json:"gas-adjustment" yaml:"gas-adjustment"`
 	GasPrices      string  `json:"gas-prices" yaml:"gas-prices"`
+	MinGasAmount   uint64  `json:"min-gas-amount" yaml:"min-gas-amount"`
 	Debug          bool    `json:"debug" yaml:"debug"`
 	Timeout        string  `json:"timeout" yaml:"timeout"`
 	OutputFormat   string  `json:"output-format" yaml:"output-format"`
@@ -60,9 +65,9 @@ func (pc CosmosProviderConfig) NewProvider(log *zap.Logger, homepath string, deb
 		return nil, err
 	}
 	pc.ChainName = chainName
-	return &CosmosProvider{
-		log: log,
 
+	return &CosmosProvider{
+		log:         log,
 		ChainClient: *cc,
 		PCfg:        pc,
 	}, nil
@@ -79,6 +84,7 @@ func ChainClientConfig(pcfg *CosmosProviderConfig) *lens.ChainClientConfig {
 		KeyringBackend: pcfg.KeyringBackend,
 		GasAdjustment:  pcfg.GasAdjustment,
 		GasPrices:      pcfg.GasPrices,
+		MinGasAmount:   pcfg.MinGasAmount,
 		Debug:          pcfg.Debug,
 		Timeout:        pcfg.Timeout,
 		OutputFormat:   pcfg.OutputFormat,
@@ -90,8 +96,17 @@ func ChainClientConfig(pcfg *CosmosProviderConfig) *lens.ChainClientConfig {
 type CosmosProvider struct {
 	log *zap.Logger
 
-	lens.ChainClient
 	PCfg CosmosProviderConfig
+
+	lens.ChainClient
+	nextAccountSeq uint64
+	txMu           sync.Mutex
+
+	// metrics to monitor the provider
+	TotalFees   sdk.Coins
+	totalFeesMu sync.Mutex
+
+	metrics *processor.PrometheusMetrics
 }
 
 type CosmosIBCHeader struct {
@@ -99,11 +114,16 @@ type CosmosIBCHeader struct {
 	ValidatorSet *tmtypes.ValidatorSet
 }
 
-// noop to implement processor.IBCHeader
-func (h CosmosIBCHeader) IBCHeaderIndicator() {}
-
 func (h CosmosIBCHeader) Height() uint64 {
 	return uint64(h.SignedHeader.Height)
+}
+
+func (h CosmosIBCHeader) ConsensusState() ibcexported.ConsensusState {
+	return &tmclient.ConsensusState{
+		Timestamp:          h.SignedHeader.Time,
+		Root:               commitmenttypes.NewMerkleRoot(h.SignedHeader.AppHash),
+		NextValidatorsHash: h.ValidatorSet.Hash(),
+	}
 }
 
 func (cc *CosmosProvider) ProviderConfig() provider.ProviderConfig {
@@ -149,15 +169,17 @@ func (cc *CosmosProvider) AddKey(name string, coinType uint32) (*provider.KeyOut
 
 // Address returns the chains configured address as a string
 func (cc *CosmosProvider) Address() (string, error) {
-	var (
-		err  error
-		info keyring.Info
-	)
-	info, err = cc.Keybase.Key(cc.PCfg.Key)
+	info, err := cc.Keybase.Key(cc.PCfg.Key)
 	if err != nil {
 		return "", err
 	}
-	out, err := cc.EncodeBech32AccAddr(info.GetAddress())
+
+	acc, err := info.GetAddress()
+	if err != nil {
+		return "", err
+	}
+
+	out, err := cc.EncodeBech32AccAddr(acc)
 	if err != nil {
 		return "", err
 	}
@@ -220,23 +242,20 @@ func (cc *CosmosProvider) WaitForNBlocks(ctx context.Context, n int64) error {
 	}
 }
 
-func (cc *CosmosProvider) BlockTime(ctx context.Context, height int64) (int64, error) {
+func (cc *CosmosProvider) BlockTime(ctx context.Context, height int64) (time.Time, error) {
 	resultBlock, err := cc.RPCClient.Block(ctx, &height)
 	if err != nil {
-		return 0, err
+		return time.Time{}, err
 	}
-	return resultBlock.Block.Time.UnixNano(), nil
+	return resultBlock.Block.Time, nil
 }
 
-func toCosmosPacket(pi provider.PacketInfo) chantypes.Packet {
-	return chantypes.Packet{
-		Sequence:           pi.Sequence,
-		SourcePort:         pi.SourcePort,
-		SourceChannel:      pi.SourceChannel,
-		DestinationPort:    pi.DestPort,
-		DestinationChannel: pi.DestChannel,
-		Data:               pi.Data,
-		TimeoutHeight:      pi.TimeoutHeight,
-		TimeoutTimestamp:   pi.TimeoutTimestamp,
+func (cc *CosmosProvider) SetMetrics(m *processor.PrometheusMetrics) {
+	cc.metrics = m
+}
+
+func (cc *CosmosProvider) updateNextAccountSequence(seq uint64) {
+	if seq > cc.nextAccountSeq {
+		cc.nextAccountSeq = seq
 	}
 }

@@ -38,9 +38,11 @@ Additional information on how IBC works can be found [here](https://ibc.cosmos.n
 ## Table Of Contents
 - [Basic Usage - Relaying Across Chains](#Basic-Usage---Relaying-Packets-Across-Chains)
 - [Create Path Across Chains](./docs/create-path-across-chain.md)
+- [Advanced Usage](./docs/advanced_usage.md)
 - [Troubleshooting](./docs/troubleshooting.md)
 - [Features](./docs/features.md)
 - [Relayer Terminology](./docs/terminology.md)
+- [New Chain Implementation](./docs/chain_implementation.md)
 - [Recommended Pruning Settings](./docs/node_pruning.md)
 - [Demo](./docs/demo.md)
 
@@ -153,17 +155,14 @@ Additional information on how IBC works can be found [here](https://ibc.cosmos.n
    >NOTE: Thinking of chains in the config as "source" and "destination" can be confusing. Be aware that most path are bi-directional.
 
    <br>
-   `rly paths fetch` will check for the relevant `path.json` files for ALL configured chains in your config file.  
-   The path meta-data is queried from the [interchain](https://github.com/cosmos/relayer/tree/main/interchain) directory.
+
+   `rly paths fetch` will check for IBC path meta data from the [chain-registry](https://github.com/cosmos/chain-registry/tree/master/_IBC) and add these paths to your config file.
 
      ```shell
      $ rly paths fetch
      ```
    > **NOTE:** Don't see the path metadata for paths you want to relay on?   
    > Please open a PR to add this metadata to the GitHub repo!
-
-   At minimum, this command will add two paths, in our case it will add one path from cosmoshub to osmosis and another path from osmosis to cosmoshub.
-
 
 8. #### **Configure the channel filter.**
    
@@ -205,10 +204,10 @@ Additional information on how IBC works can be found [here](https://ibc.cosmos.n
      ```shell
      $ rly paths list
      $ rly start [path]
+     # Optionally you can omit the `path` argument to start all configured paths
+     $ rly start 
      ```
    
-    You will need to start a separate shell instance for each path you wish to relay over.
-
     >When running multiple instances of `rly start`, you will need to use the `--debug-addr` flag and provide an address:port. You can also pass an empty string `''`  to turn off this feature or pass `localhost:0` to randomly select a port.
 
     ---

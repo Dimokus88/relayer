@@ -1,15 +1,17 @@
 package cosmos
 
 import (
-	conntypes "github.com/cosmos/ibc-go/v4/modules/core/03-connection/types"
-	chantypes "github.com/cosmos/ibc-go/v4/modules/core/04-channel/types"
+	"context"
+
+	conntypes "github.com/cosmos/ibc-go/v5/modules/core/03-connection/types"
+	chantypes "github.com/cosmos/ibc-go/v5/modules/core/04-channel/types"
 	"github.com/cosmos/relayer/v2/relayer/processor"
 	"github.com/cosmos/relayer/v2/relayer/provider"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
-func (ccp *CosmosChainProcessor) handleMessage(m ibcMessage, c processor.IBCMessagesCache) {
+func (ccp *CosmosChainProcessor) handleMessage(ctx context.Context, m ibcMessage, c processor.IBCMessagesCache) {
 	switch t := m.info.(type) {
 	case *packetInfo:
 		ccp.handlePacketMessage(m.eventType, provider.PacketInfo(*t), c)
@@ -18,7 +20,7 @@ func (ccp *CosmosChainProcessor) handleMessage(m ibcMessage, c processor.IBCMess
 	case *connectionInfo:
 		ccp.handleConnectionMessage(m.eventType, provider.ConnectionInfo(*t), c)
 	case *clientInfo:
-		ccp.handleClientMessage(m.eventType, *t)
+		ccp.handleClientMessage(ctx, m.eventType, *t)
 	}
 }
 
@@ -56,19 +58,39 @@ func (ccp *CosmosChainProcessor) handlePacketMessage(eventType string, pi provid
 func (ccp *CosmosChainProcessor) handleChannelMessage(eventType string, ci provider.ChannelInfo, ibcMessagesCache processor.IBCMessagesCache) {
 	ccp.channelConnections[ci.ChannelID] = ci.ConnID
 	channelKey := processor.ChannelInfoChannelKey(ci)
-	switch eventType {
-	case chantypes.EventTypeChannelOpenInit, chantypes.EventTypeChannelOpenTry:
-		ccp.channelStateCache[channelKey] = false
-	case chantypes.EventTypeChannelOpenAck, chantypes.EventTypeChannelOpenConfirm:
-		ccp.channelStateCache[channelKey] = true
-	case chantypes.EventTypeChannelCloseConfirm:
+
+	if eventType == chantypes.EventTypeChannelOpenInit {
+		found := false
 		for k := range ccp.channelStateCache {
-			if k.PortID == ci.PortID && k.ChannelID == ci.ChannelID {
-				ccp.channelStateCache[k] = false
+			// Don't add a channelKey to the channelStateCache without counterparty channel ID
+			// since we already have the channelKey in the channelStateCache which includes the
+			// counterparty channel ID.
+			if k.MsgInitKey() == channelKey {
+				found = true
 				break
 			}
 		}
+		if !found {
+			ccp.channelStateCache[channelKey] = false
+		}
+	} else {
+		switch eventType {
+		case chantypes.EventTypeChannelOpenTry:
+			ccp.channelStateCache[channelKey] = false
+		case chantypes.EventTypeChannelOpenAck, chantypes.EventTypeChannelOpenConfirm:
+			ccp.channelStateCache[channelKey] = true
+		case chantypes.EventTypeChannelCloseConfirm:
+			for k := range ccp.channelStateCache {
+				if k.PortID == ci.PortID && k.ChannelID == ci.ChannelID {
+					ccp.channelStateCache[k] = false
+					break
+				}
+			}
+		}
+		// Clear out MsgInitKeys once we have the counterparty channel ID
+		delete(ccp.channelStateCache, channelKey.MsgInitKey())
 	}
+
 	ibcMessagesCache.ChannelHandshake.Retain(channelKey, eventType, ci)
 
 	ccp.logChannelMessage(eventType, ci)
@@ -77,15 +99,33 @@ func (ccp *CosmosChainProcessor) handleChannelMessage(eventType string, ci provi
 func (ccp *CosmosChainProcessor) handleConnectionMessage(eventType string, ci provider.ConnectionInfo, ibcMessagesCache processor.IBCMessagesCache) {
 	ccp.connectionClients[ci.ConnID] = ci.ClientID
 	connectionKey := processor.ConnectionInfoConnectionKey(ci)
-	open := (eventType == conntypes.EventTypeConnectionOpenAck || eventType == conntypes.EventTypeConnectionOpenConfirm)
-	ccp.connectionStateCache[connectionKey] = open
+	if eventType == conntypes.EventTypeConnectionOpenInit {
+		found := false
+		for k := range ccp.connectionStateCache {
+			// Don't add a connectionKey to the connectionStateCache without counterparty connection ID
+			// since we already have the connectionKey in the connectionStateCache which includes the
+			// counterparty connection ID.
+			if k.MsgInitKey() == connectionKey {
+				found = true
+				break
+			}
+		}
+		if !found {
+			ccp.connectionStateCache[connectionKey] = false
+		}
+	} else {
+		// Clear out MsgInitKeys once we have the counterparty connection ID
+		delete(ccp.connectionStateCache, connectionKey.MsgInitKey())
+		open := (eventType == conntypes.EventTypeConnectionOpenAck || eventType == conntypes.EventTypeConnectionOpenConfirm)
+		ccp.connectionStateCache[connectionKey] = open
+	}
 	ibcMessagesCache.ConnectionHandshake.Retain(connectionKey, eventType, ci)
 
 	ccp.logConnectionMessage(eventType, ci)
 }
 
-func (ccp *CosmosChainProcessor) handleClientMessage(eventType string, ci clientInfo) {
-	ccp.latestClientState.update(ci)
+func (ccp *CosmosChainProcessor) handleClientMessage(ctx context.Context, eventType string, ci clientInfo) {
+	ccp.latestClientState.update(ctx, ci, ccp)
 	ccp.logObservedIBCMessage(eventType, zap.String("client_id", ci.clientID))
 }
 
